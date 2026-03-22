@@ -1,0 +1,23 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.venv
+venv/
+ENV/
+
+# Project Specific
+.env
+data/
+models/
+*.log
+
+# IDE
+.vscode/
+.idea/
+.DS_Store
+
+# LlamaIndex / FAISS
+storage/
+index/
