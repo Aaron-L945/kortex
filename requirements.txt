@@ -1,0 +1,13 @@
+fastapi
+uvicorn
+llama-index
+faiss-cpu
+streamlit
+python-multipart
+python-jose[cryptography]
+passlib[bcrypt]
+pydantic-settings
+transformers
+torch
+sentence-transformers
+llama-index-llms-anthropic
