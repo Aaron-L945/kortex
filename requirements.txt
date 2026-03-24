@@ -1,13 +1,6 @@
-fastapi
-uvicorn
-llama-index
+langchain
+langchain-community
+langchain-huggingface
 faiss-cpu
-streamlit
-python-multipart
-python-jose[cryptography]
-passlib[bcrypt]
-pydantic-settings
-transformers
-torch
+pymupdf
 sentence-transformers
-llama-index-llms-anthropic
