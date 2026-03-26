@@ -1,37 +1,3 @@
-# import os
-# import re
-# from langchain_community.document_loaders import PyMuPDFLoader
-# from langchain.text_splitter import RecursiveCharacterTextSplitter
-# from config import Config
-
-# def clean_text(text):
-#     text = re.sub(r'\x0c', '', text)
-#     text = re.sub(r'\n+', '\n', text)
-#     return text
-
-# def load_and_split():
-#     all_chunks = []
-#     if not os.listdir(Config.DOC_DIR):
-#         return []
-        
-#     for file in os.listdir(Config.DOC_DIR):
-#         if file.endswith(".pdf"):
-#             print(f"正在解析: {file}")
-#             loader = PyMuPDFLoader(os.path.join(Config.DOC_DIR, file))
-#             documents = loader.load()
-#             for doc in documents:
-#                 doc.page_content = clean_text(doc.page_content)
-            
-#             text_splitter = RecursiveCharacterTextSplitter(
-#                 chunk_size=Config.CHUNK_SIZE,
-#                 chunk_overlap=Config.CHUNK_OVERLAP,
-#                 separators=["\n\n", "\n", "。", "！", "？", ".", "!", "?", " ", ""]
-#             )
-#             all_chunks.extend(text_splitter.split_documents(documents))
-#     return all_chunks
-
-
-
 import os
 from langchain_community.document_loaders import PyMuPDFLoader
 from rapidocr_onnxruntime import RapidOCR

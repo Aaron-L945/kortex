@@ -21,3 +21,6 @@ models/
 # LlamaIndex / FAISS
 storage/
 index/
+faiss*.bin
+corpus*
+vector_store/
