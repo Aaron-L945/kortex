@@ -3,7 +3,7 @@ import re
 from langchain.prompts import ChatPromptTemplate
 from llm_service import get_qwen_llm
 from embedder import load_vector_store
-from core.retriever import HybridRetriever
+from core.retriever_without_windows import HybridRetriever
 from reranker import reranker_tool
 from loguru import logger
 

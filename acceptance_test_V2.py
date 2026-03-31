@@ -1,6 +1,6 @@
 import os
 from embedder import load_vector_store
-from core.retriever import HybridRetriever
+from core.retriever_without_windows import HybridRetriever
 from loguru import logger
 
 
