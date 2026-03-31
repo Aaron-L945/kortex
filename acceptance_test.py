@@ -3,7 +3,7 @@ import re
 from loguru import logger
 # 假设你的项目结构如下，请确保导入路径正确
 from embedder import load_vector_store
-from core.retriever import HybridRetriever
+from core.retriever_without_windows import HybridRetriever
 from reranker import reranker_tool
 
 def get_expanded_context_final(selected_docs, all_candidates, window_size=3):
