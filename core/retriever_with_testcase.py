@@ -246,7 +246,8 @@ class HybridRetrieverV3:
         # ===============================
         # 阶段 D: 日志
         # ===============================
-        if t_id_str and (target_rank > 5 or target_rank == -1):
+        # if t_id_str and (target_rank > 5 or target_rank == -1):
+        if t_id_str:
             with open(self.failure_log_path, "a", encoding="utf-8") as f:
                 analysis = {
                     "query": query,
