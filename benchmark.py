@@ -86,4 +86,4 @@ if __name__ == "__main__":
     
     # 运行
     tester = RAGSimplifiedTester(retriever)
-    tester.run_benchmark(test_file="test_queries.jsonl")
+    tester.run_benchmark(test_file="test_queries_mix.jsonl")

@@ -1,0 +1,9 @@
+查找结果统计
+========================================
+输入目标文件: /root/tests/aaron/kortex/failure_analysis.jsonl
+corpus文件: /root/tests/aaron/kortex/test_queries.jsonl
+总目标数: 20
+成功匹配: 20
+未找到: 0
+匹配率: 100.00%
+
