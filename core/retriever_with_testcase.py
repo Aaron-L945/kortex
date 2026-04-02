@@ -111,41 +111,78 @@ class HybridRetrieverV3:
         self._build_semantic_index()
 
     def _build_user_dict(self, jsonl_path):
-        logger.info("🧠 自动构建用户词典...")
+        logger.info("🧠 自动构建用户词典（优化版）...")
 
-        word_set = set()
+        from collections import Counter
 
+        counter = Counter()
+        title_words = set()
+
+        # =========================
+        # 1️⃣ 收集候选词（带频次）
+        # =========================
         with open(jsonl_path, "r", encoding="utf-8") as f:
             for line in f:
                 data = json.loads(line)
 
-                # 1️⃣ 标题（强信号🔥）
+                # 🔥 标题（强信号）
                 title = data.get("title", "")
                 if len(title) > 2:
-                    word_set.add(title.strip())
+                    title_words.add(title.strip())
 
-                # 2️⃣ docid（有时候是实体）
-                docid = str(data.get("docid", ""))
-                if len(docid) > 2:
-                    word_set.add(docid)
-
-                # 3️⃣ 长词（规则抽取）
                 text = data.get("text", "")
-                # 用正则抽长词（替代 jieba）
+
+                # 正则抽长词
                 words = re.findall(r"[\u4e00-\u9fffA-Za-z0-9]{4,}", text)
-                for w in words:
-                    word_set.add(w)
 
-        # 写入词典
-        with open(self.user_dict_path, "w", encoding="utf-8") as f:
-            for w in word_set:
-                f.write(f"{w} 50\n")
+                counter.update(words)
 
-        # 重新加载
-        jieba.load_userdict(self.user_dict_path)
+        # =========================
+        # 2️⃣ 过滤规则（核心🔥）
+        # =========================
+        bad_patterns = [
+            "研究",
+            "表示",
+            "发现",
+            "指出",
+            "认为",
+            "具有",
+            "进行",
+            "通过",
+            "一种",
+            "可以",
+        ]
 
-        logger.info(f"✅ 用户词典构建完成，共 {len(word_set)} 个词")
+        def is_good_word(w, c):
+            if c < 3:  # 🔥 频次过滤
+                return False
+            if len(w) > 20:  # 句子过滤
+                return False
+            if w.isdigit():  # 纯数字
+                return False
+            if any(p in w for p in bad_patterns):
+                return False
+            return True
 
+        word_set = [w for w, c in counter.items() if is_good_word(w, c)]
+
+        # =========================
+        # 3️⃣ 加入标题词（不做过滤🔥）
+        # =========================
+        word_set = set(word_set) | title_words
+
+        # =========================
+        # 4️⃣ 控制规模（防炸🔥）
+        # =========================
+        MAX_DICT_SIZE = 60000
+
+        if len(word_set) > MAX_DICT_SIZE:
+            logger.warning(f"⚠️ 词典过大，截断到 {MAX_DICT_SIZE}")
+            word_set = list(word_set)[:MAX_DICT_SIZE]
+
+        # =========================
+        # 5️⃣ 写入词典（自动+手工一起写）
+        # =========================
         manual_words = [
             "南京大学生命科学学院",
             "中国科学社生物研究所",
@@ -155,11 +192,21 @@ class HybridRetrieverV3:
             "网络孟乔森综合症",
         ]
 
-        with open(self.user_dict_path, "a", encoding="utf-8") as f:
-            for w in manual_words:
-                f.write(f"{w} 20\n")  # 更高权重
+        with open(self.user_dict_path, "w", encoding="utf-8") as f:
+            # 自动词
+            for w in word_set:
+                f.write(f"{w} 10\n")
 
+            # 手工词（高权重🔥）
+            for w in manual_words:
+                f.write(f"{w} 50\n")
+
+        # =========================
+        # 6️⃣ 加载词典
+        # =========================
         jieba.load_userdict(self.user_dict_path)
+
+        logger.info(f"✅ 用户词典构建完成，共 {len(word_set)} 个词")
 
     def _build_semantic_index(self):
         logger.info("🧠 构建语义关键词索引...")
@@ -248,27 +295,11 @@ class HybridRetrieverV3:
         return [self.semantic_keywords[i] for i in top_idx]
 
     def _expand_query_priority1(self, query):
-        expansions = [query]  # ✅ 原 query 必须保留
+        # 【P0：绝对优先级】原始 Query 必须在第一位
+        expansions = [query]
 
-        # --------------------------
-        # 1️⃣ 尝试提取实体短语（简化示例）
-        # 可以结合 jieba.posseg / ner 模块
-        words = list(jieba.cut(query))
-
-        # 粗略规则：连续名词或专有名词组成的短语
-        phrase = ""
-        for w in words:
-            if re.match(r"[\u4e00-\u9fffA-Za-z0-9]+", w):
-                phrase += w
-            else:
-                if phrase:
-                    expansions.append(phrase)
-                    phrase = ""
-        if phrase:
-            expansions.append(phrase)
-
-        # --------------------------
-        # 2️⃣ 外语 / 映射表增强（可维护字典）
+        # 【P1：业务硬规则 - 外语/映射增强】
+        # 解决：中文搜不到，英文能搜到的情况
         foreign_map = {
             "网络孟乔森综合症": "Munchausen by Internet",
             "印第安纳自治市镇": "Indiana township",
@@ -277,46 +308,79 @@ class HybridRetrieverV3:
             if k in query:
                 expansions.append(v)
 
-        # --------------------------
-        # 3️⃣ 原有规则增强（可选）
-        if "比例" in query:
-            expansions.append(query + " 占比 百分比")
-        if "时间" in query:
-            expansions.append(query + " 日期 年份")
-        if "有哪些" in query:
-            expansions.append(query + " 包括 什么")
+        # 【P2：业务硬规则 - 疑问词增强】
+        # 解决：语义对齐（时间->年份，比例->百分比）
+        if "比例" in query or "占比" in query:
+            expansions.append(query + " 占比 百分比 %")
+        if "时间" in query or "何时" in query or "年份" in query:
+            expansions.append(query + " 日期 年份 成立时间")
+        if "有哪些" in query or "是什么" in query:
+            expansions.append(query + " 包括 包含 简介")
 
-        # 去重
-        return list(set(expansions))
+        # 【P3：实体/别名增强】
+        # 解决：缩写与全称（南大->南京大学）
+        alias_map = {
+            "南京大学": ["南大", "国立中央大学"],
+            "成立": ["创办", "创建", "建立"],
+            "成员": ["团员", "名单", "组成人员"]
+        }
+        for k, synonyms in alias_map.items():
+            if k in query:
+                for syn in synonyms:
+                    expansions.append(query.replace(k, syn))
+
+        # 【P4：结构化提取】
+        # 解决：长 Query 降噪，只留核心实体
+        import jieba.posseg as pseg
+        words = pseg.lcut(query)
+        # 提取名词性实体
+        entities = [w for w, t in words if t in ['nt', 'nz', 'nr', 'n']]
+        if len(entities) > 1:
+            expansions.append(" ".join(entities))
+
+        # ==========================================
+        # 最后一步：【确定性去重返回】🔥
+        # 使用 dict.fromkeys 保证 P0 -> P1 -> P2 -> P3 -> P4 的顺序不乱
+        # ==========================================
+        unique_results = list(dict.fromkeys(expansions))
+        
+        # 返回前 8 个，确保最精准的规则在前，最泛化的在后
+        return unique_results[:8]
 
     def _rewrite_query(self, query):
-        queries = set()
+        # 使用 list 保持顺序，或者最后进行确定性排序
+        query_list = []
 
-        # ✅ 原始 query
-        queries.add(query)
+        # 1. 原始 query 优先级最高，排第一
+        query_list.append(query)
 
-        # =========================
-        # 1️⃣ 原有规则扩展
-        # =========================
+        # 2. 规则扩展 (优先级 2)
         rule_queries = self._expand_query_priority1(query)
-        queries.update(rule_queries)
+        for rq in rule_queries:
+            if rq not in query_list:
+                query_list.append(rq)
 
-        # =========================
-        # 2️⃣ 语义扩展（核心🔥）
-        # =========================
+        # 3. 语义扩展 (优先级 3)
         words = jieba.lcut(query)
-
+        semantic_queries = []
         for w in words:
             if len(w) <= 1 or w in self.stopwords:
                 continue
-
             sim_words = self._semantic_expand(w, top_k=2)
-
             for sw in sim_words:
                 new_q = query.replace(w, sw)
-                queries.add(new_q)
+                if new_q not in query_list:
+                    semantic_queries.append(new_q)
 
-        return list(queries)[:8]  # 控制数量（很重要）
+        # 将语义扩展接在后面
+        query_list.extend(semantic_queries)
+
+        # 4. 【关键】去重并保持顺序（Python 3.7+ dict 是有序的）
+        unique_queries = list(dict.fromkeys(query_list))
+
+        # 5. 【增强】确定性截断：如果还是想按长度优先，可以再排一次序
+        # 但通常建议：原始 Query 必须在前 3 个。
+        return unique_queries[:8]
 
     def _force_phrase(self, query):
         phrases = ["南京大学生命科学学院", "中国科学社生物研究所", "印第安纳自治市镇"]
