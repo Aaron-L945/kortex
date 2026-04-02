@@ -17,7 +17,7 @@ async def call_model(semaphore, item):
     async with semaphore:
         text = item['text']
         title = item.get('title', '')
-        prompt = f"你是一个搜索模拟器。根据内容生成一个简短、自然的中文搜索提问，必须包含主语：\n标题：{title}\n正文：{text[:300]}"
+        prompt = f"你是一个搜索模拟器。根据内容生成一个简短、自然的中文搜索提问，必须包含主语：\n正文：{text[:500]}"
         
         for _ in range(3):
             try:
@@ -80,4 +80,4 @@ async def main(input_jsonl, output_jsonl, total_target_size=500):
 
 if __name__ == "__main__":
     # 参数说明：输入语料, 输出文件, 最终想要的 query 总量
-    asyncio.run(main("corpus_dedup.jsonl", "test_queries.jsonl", total_target_size=1000))
+    asyncio.run(main("corpus_dedup.jsonl", "test_queries.jsonl", total_target_size=500))

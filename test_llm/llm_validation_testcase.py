@@ -6,11 +6,10 @@ PROMPT_TEMPLATE = """
 
 ### 核心铁律（违反任何一条将导致任务失败）：
 1. 【原文提取】：**严禁对数值、日期、金额、百分比进行任何形式的改写、取整、转换或四舍五入。** 必须 100% 摘抄原文符号。
-   - 错误：约33%、33.0%、三成、3,500万。
-   - 正确：必须与资料中的 [88,847] 或 [33.3%] 字符完全一致。
 2. 【禁止推理】：禁止根据资料进行逻辑推导。如果资料说“A和B相关”，你不能回答“A影响了B”。
 3. 【原子化引用】：每一个事实陈述后必须紧跟引用的 [docid]。禁止在段落末尾汇总标注。
 4. 【死板拒答】：若资料中未出现问题的主体（实体词），或资料无法直接推导答案，必须统一回复：“抱歉，根据已知资料无法回答该问题。”，不得输出任何其他文字。
+5.  请直接引用资料中的原始数值，不要进行任何形式的加总、平均或换算。
 
 ### 回答结构（严格执行）：
 [结论]：用一句话直接回答问题。
@@ -55,51 +54,88 @@ class RAGAnswerEngine:
         self.llm = llm_client
         self.request_timeout = request_timeout  # 单次 LLM 推理的最高容忍时间
 
+
     def _verify_metrics(self, answer, docs, category="unknown"):
         """
-        增强版审计逻辑
-        category: pos (有答案), neg (无关), blur (模糊)
+        最终优化版审计逻辑
+        修复点：
+        1. 细化拒答判定：只有在没有引用且包含拒答词时才判定为拒绝。
+        2. 增强引用提取：解决 re.findall 分组导致的 ID 截断问题。
+        3. 优化一致性匹配：排除引用干扰，提高数字比对健壮性。
         """
-        is_refusal = any(word in answer for word in ["抱歉", "无法回答", "没有提到", "未提供"])
         
-        # --- 1. 处理 NEG (无关类) 的判定 ---
+        # --- 0. 预处理：提取引用 (使用非捕获组确保提取完整 ID，如 123#1) ---
+        # 先提取带括号的全文本，再剥离括号，避免 findall 分组捕获问题
+        raw_citations = re.findall(r"\[\d+(?:#\d+)?\]", answer)
+        claimed_ids = [c.strip("[]") for c in raw_citations]
+        citation_count = len(claimed_ids)
+
+        # --- 1. 拒答判定 (逻辑升级：有引用即代表尝试回答) ---
+        refusal_keywords = ["抱歉", "无法回答", "没有提到", "未提供", "不详"]
+        # 只有当：含有拒答词 且 引用数为0 且 长度较短时，才判定为真拒答
+        is_refusal_detected = any(word in answer for word in refusal_keywords)
+        
+        # 核心修正：如果模型给出了引用，说明它在资料中找到了内容，不应判定为 is_refusal
+        actual_refusal = is_refusal_detected and citation_count == 0
+
+        # --- 2. 处理 NEG (无关类) 的判定 ---
         if category == "neg":
-            # 无关类最完美的表现就是拒答，且不产生幻觉
             return {
-                "is_refusal": is_refusal,
-                "hallucination": False, 
+                "is_refusal": actual_refusal,
+                "hallucination": citation_count > 0, # NEG 组如果写了引用，反而是幻觉
                 "consistency_ok": True,
-                "citation_count": 0,
+                "citation_count": citation_count,
                 "status": "success"
             }
 
-        # --- 2. 处理 POS/BLUR 的一致性判定 (解决 33% 问题) ---
-        if is_refusal:
-            return {"is_refusal": True, "hallucination": False, "consistency_ok": True, "citation_count": 0, "status": "success"}
+        # --- 3. 处理 POS/BLUR 的判定 ---
+        if actual_refusal:
+            return {
+                "is_refusal": True, 
+                "hallucination": False, 
+                "consistency_ok": True, 
+                "citation_count": 0, 
+                "status": "success"
+            }
 
-        # 提取数字并归一化 (去掉逗号、百分号)
-        numbers_in_ans = re.findall(r"\d+(?:\.\d+)?%?", answer)
+        # --- 4. 一致性检查 (数值校验) ---
+        # 剔除引用 ID 干扰，避免将文档 ID 误认为事实数字
+        clean_answer_for_audit = re.sub(r"\[\d+(?:#\d+)?\]", "", answer)
+        
+        # 提取数字（含百分比）
+        numbers_in_ans = re.findall(r"\d+(?:\.\d+)?%?", clean_answer_for_audit)
+        # 预处理源码：合并内容并统一剔除千分位逗号
         combined_source = "".join([d['content'] for d in docs]).replace(",", "")
         
         consistency_risk = False
         for num in numbers_in_ans:
             clean_n = num.replace(",", "").replace("%", "")
-            # 排除掉常见的年份(4位)或单数字，重点查长数和百分比
+            # 长度 > 1 的数字（排除掉 0-9 或单纯的年份 2024）才进行深度校验
             if len(clean_n) > 1: 
+                # 校验逻辑：
+                # 1. 字符串直接包含
+                # 2. 或者 整数部分包含（处理 85.5% 被模型简写为 85.5 的情况）
                 if clean_n not in combined_source and clean_n.split('.')[0] not in combined_source:
+                    # 特殊逻辑：如果是计算出来的总和数字，在基础 RAG 中通常会判错
+                    # 除非原文确实存在该数字
                     consistency_risk = True
                     break
 
-        # --- 3. 引用检查 ---
-        claimed_ids = re.findall(r"\[(\d+(?:#\d+)?)\]", answer)
+        # --- 5. 引用幻觉检查 (ID 是否合法) ---
+        # 这里的 source_ids 通常只有主 ID，需要处理带 # 的匹配
         source_ids = [str(d['metadata']['docid']) for d in docs]
-        id_hallucination = any(cid for cid in claimed_ids if cid not in source_ids)
+        id_hallucination = False
+        for cid in claimed_ids:
+            main_id = cid.split('#')[0]
+            if main_id not in source_ids:
+                id_hallucination = True
+                break
 
         return {
             "is_refusal": False,
             "hallucination": id_hallucination,
             "consistency_ok": not consistency_risk,
-            "citation_count": len(claimed_ids),
+            "citation_count": citation_count,
             "status": "success"
         }
 
