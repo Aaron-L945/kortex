@@ -24,3 +24,4 @@ index/
 faiss*.bin
 corpus*
 vector_store/
+user_dict.txt
