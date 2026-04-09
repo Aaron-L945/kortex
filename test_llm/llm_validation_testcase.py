@@ -192,7 +192,15 @@ class RAGAnswerEngine:
 # 3. 执行脚本 (Main)
 # ==========================================
 if __name__ == "__main__":
+    import sys
     import os
+
+    project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+    # 添加到 sys.path
+    if project_root not in sys.path:
+        sys.path.append(project_root)
+    
     from core.retriever_with_testcase import HybridRetrieverV3
     from config import Config
     from llm_service import get_qwen_llm
@@ -222,7 +230,7 @@ if __name__ == "__main__":
     engine = RAGAnswerEngine(retriever=retriever, llm_client=llm)
     
     # 测试 Query
-    test_query = "某公司2023年研发投入是多少？"
+    test_query = "谁写了《网络独立宣言》？"
     final_res = engine.generate_answer(test_query)
     
     print("\n" + "="*50)
