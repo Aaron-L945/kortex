@@ -16,7 +16,9 @@ import pickle
 
 
 class HybridRetrieverV3:
-    def __init__(self, model_path: str, reranker_path: str = None, bm25_path="config/bm25.pkl"):
+    def __init__(
+        self, model_path: str, reranker_path: str = None, bm25_path="config/bm25.pkl"
+    ):
         self.device = "cuda" if torch.cuda.is_available() else "cpu"
         logger.info(f"⚙️ 初始化检索器，使用设备: {self.device}")
         self.bm25_path = bm25_path
@@ -40,8 +42,17 @@ class HybridRetrieverV3:
         self.failure_log_path = "failure_analysis.jsonl"
         self.stopwords = set(
             [
-                "什么", "多少", "如何", "是否", "为什么", "哪里", 
-                "的", "了", "和", "是", "在",
+                "什么",
+                "多少",
+                "如何",
+                "是否",
+                "为什么",
+                "哪里",
+                "的",
+                "了",
+                "和",
+                "是",
+                "在",
             ]
         )
 
@@ -105,6 +116,7 @@ class HybridRetrieverV3:
     def _build_user_dict(self, jsonl_path):
         logger.info("🧠 自动构建用户词典（优化版）...")
         from collections import Counter
+
         counter = Counter()
         title_words = set()
 
@@ -118,13 +130,28 @@ class HybridRetrieverV3:
                 words = re.findall(r"[\u4e00-\u9fffA-Za-z0-9]{4,}", text)
                 counter.update(words)
 
-        bad_patterns = ["研究", "表示", "发现", "指出", "认为", "具有", "进行", "通过", "一种", "可以"]
+        bad_patterns = [
+            "研究",
+            "表示",
+            "发现",
+            "指出",
+            "认为",
+            "具有",
+            "进行",
+            "通过",
+            "一种",
+            "可以",
+        ]
 
         def is_good_word(w, c):
-            if c < 3: return False
-            if len(w) > 20: return False
-            if w.isdigit(): return False
-            if any(p in w for p in bad_patterns): return False
+            if c < 3:
+                return False
+            if len(w) > 20:
+                return False
+            if w.isdigit():
+                return False
+            if any(p in w for p in bad_patterns):
+                return False
             return True
 
         word_set = [w for w, c in counter.items() if is_good_word(w, c)]
@@ -133,7 +160,14 @@ class HybridRetrieverV3:
         if len(word_set) > MAX_DICT_SIZE:
             word_set = list(word_set)[:MAX_DICT_SIZE]
 
-        manual_words = ["南京大学生命科学学院", "中国科学社生物研究所", "教育部", "印第安纳自治市镇", "年龄人口分布", "网络孟乔森综合症"]
+        manual_words = [
+            "南京大学生命科学学院",
+            "中国科学社生物研究所",
+            "教育部",
+            "印第安纳自治市镇",
+            "年龄人口分布",
+            "网络孟乔森综合症",
+        ]
 
         with open(self.user_dict_path, "w", encoding="utf-8") as f:
             for w in word_set:
@@ -178,7 +212,7 @@ class HybridRetrieverV3:
         start = time.time()
         self.index = faiss.read_index(self.index_path)
         print("faiss load:", time.time() - start)
-        
+
         with open(self.metadata_path, "r", encoding="utf-8") as f:
             self.corpus_docs = json.load(f)
 
@@ -209,23 +243,37 @@ class HybridRetrieverV3:
 
     def _expand_query_priority1(self, query):
         expansions = [query]
-        foreign_map = {"网络孟乔森综合症": "Munchausen by Internet", "印第安纳自治市镇": "Indiana township"}
+        foreign_map = {
+            "网络孟乔森综合症": "Munchausen by Internet",
+            "印第安纳自治市镇": "Indiana township",
+        }
         for k, v in foreign_map.items():
-            if k in query: expansions.append(v)
-        
-        if "比例" in query or "占比" in query: expansions.append(query + " 占比 百分比 %")
-        if "时间" in query or "何时" in query or "年份" in query: expansions.append(query + " 日期 年份 成立时间")
-        if "有哪些" in query or "是什么" in query: expansions.append(query + " 包括 包含 简介")
+            if k in query:
+                expansions.append(v)
 
-        alias_map = {"南京大学": ["南大", "国立中央大学"], "成立": ["创办", "创建", "建立"], "成员": ["团员", "名单", "组成人员"]}
+        if "比例" in query or "占比" in query:
+            expansions.append(query + " 占比 百分比 %")
+        if "时间" in query or "何时" in query or "年份" in query:
+            expansions.append(query + " 日期 年份 成立时间")
+        if "有哪些" in query or "是什么" in query:
+            expansions.append(query + " 包括 包含 简介")
+
+        alias_map = {
+            "南京大学": ["南大", "国立中央大学"],
+            "成立": ["创办", "创建", "建立"],
+            "成员": ["团员", "名单", "组成人员"],
+        }
         for k, synonyms in alias_map.items():
             if k in query:
-                for syn in synonyms: expansions.append(query.replace(k, syn))
+                for syn in synonyms:
+                    expansions.append(query.replace(k, syn))
 
         import jieba.posseg as pseg
+
         words = pseg.lcut(query)
-        entities = [w for w, t in words if t in ['nt', 'nz', 'nr', 'n']]
-        if len(entities) > 1: expansions.append(" ".join(entities))
+        entities = [w for w, t in words if t in ["nt", "nz", "nr", "n"]]
+        if len(entities) > 1:
+            expansions.append(" ".join(entities))
 
         unique_results = list(dict.fromkeys(expansions))
         return unique_results[:8]
@@ -235,16 +283,19 @@ class HybridRetrieverV3:
         query_list.append(query)
         rule_queries = self._expand_query_priority1(query)
         for rq in rule_queries:
-            if rq not in query_list: query_list.append(rq)
+            if rq not in query_list:
+                query_list.append(rq)
 
         words = jieba.lcut(query)
         semantic_queries = []
         for w in words:
-            if len(w) <= 1 or w in self.stopwords: continue
+            if len(w) <= 1 or w in self.stopwords:
+                continue
             sim_words = self._semantic_expand(w, top_k=2)
             for sw in sim_words:
                 new_q = query.replace(w, sw)
-                if new_q not in query_list: semantic_queries.append(new_q)
+                if new_q not in query_list:
+                    semantic_queries.append(new_q)
 
         query_list.extend(semantic_queries)
         unique_queries = list(dict.fromkeys(query_list))
@@ -253,7 +304,8 @@ class HybridRetrieverV3:
     def _force_phrase(self, query):
         phrases = ["南京大学生命科学学院", "中国科学社生物研究所", "印第安纳自治市镇"]
         for p in phrases:
-            if p in query: jieba.add_word(p)
+            if p in query:
+                jieba.add_word(p)
         return query
 
     def pipeline(
@@ -266,7 +318,7 @@ class HybridRetrieverV3:
     ):
         # ⏱️ 记录总开始时间
         pipeline_start = time.time()
-        
+
         query_clean = query.replace("·", " ").replace("•", " ").strip()
         t_id_str = str(target_id).strip().lower() if target_id else ""
         query_clean = self._force_phrase(query_clean)
@@ -335,18 +387,22 @@ class HybridRetrieverV3:
                 match_count = sum(1 for w in q_words if w in title)
                 f_score += 0.1 * match_count
 
-                scored_items.append({
-                    "score": f_score,
-                    "doc_obj": rerank_candidates[i],
-                    "full_id": str(rerank_candidates[i]["metadata"]["docid"]).strip(),
-                })
+                scored_items.append(
+                    {
+                        "score": f_score,
+                        "doc_obj": rerank_candidates[i],
+                        "full_id": str(rerank_candidates[i]["metadata"]["docid"]).strip(),
+                    }
+                )
 
             for c in candidates[rerank_k:]:
-                scored_items.append({
-                    "score": 0,
-                    "doc_obj": c,
-                    "full_id": str(c["metadata"]["docid"]).strip(),
-                })
+                scored_items.append(
+                    {
+                        "score": 0,
+                        "doc_obj": c,
+                        "full_id": str(c["metadata"]["docid"]).strip(),
+                    }
+                )
 
             scored_items.sort(key=lambda x: x["score"], reverse=True)
         else:
@@ -393,7 +449,7 @@ class HybridRetrieverV3:
 
             if len(final_results) >= 50:
                 break
-        
+
         post_time = time.time() - post_start
         pipeline_total_time = time.time() - pipeline_start
 
@@ -418,9 +474,10 @@ class HybridRetrieverV3:
                 "top_1_id": scored_items[0]["full_id"] if scored_items else None,
                 "score_gap": (
                     scored_items[0]["score"] - scored_items[raw_pos - 1]["score"]
-                    if raw_pos > 0 else None
+                    if raw_pos > 0
+                    else None
                 ),
-                "latency_ms": round(pipeline_total_time * 1000, 2)
+                "latency_ms": round(pipeline_total_time * 1000, 2),
             }
             f.write(json.dumps(analysis, ensure_ascii=False) + "\n")
 
