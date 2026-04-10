@@ -39,21 +39,16 @@ from tqdm import tqdm
 from loguru import logger
 from concurrent.futures import ThreadPoolExecutor, TimeoutError
 from langchain_core.messages import SystemMessage, HumanMessage
+from langchain_core.prompts import load_prompt
+from langsmith import traceable
+from contextvars import copy_context
 
-# import re
-# import time
-# import json
-# import pandas as pd
-# from tqdm import tqdm
-# from loguru import logger
-# from concurrent.futures import ThreadPoolExecutor, TimeoutError
 
 class RAGAnswerEngine:
     def __init__(self, retriever, llm_client, request_timeout=60):
         self.retriever = retriever
         self.llm = llm_client
         self.request_timeout = request_timeout  # 单次 LLM 推理的最高容忍时间
-
 
     def _verify_metrics(self, answer, docs, category="unknown"):
         """
@@ -63,7 +58,7 @@ class RAGAnswerEngine:
         2. 增强引用提取：解决 re.findall 分组导致的 ID 截断问题。
         3. 优化一致性匹配：排除引用干扰，提高数字比对健壮性。
         """
-        
+
         # --- 0. 预处理：提取引用 (使用非捕获组确保提取完整 ID，如 123#1) ---
         # 先提取带括号的全文本，再剥离括号，避免 findall 分组捕获问题
         raw_citations = re.findall(r"\[\d+(?:#\d+)?\]", answer)
@@ -74,7 +69,7 @@ class RAGAnswerEngine:
         refusal_keywords = ["抱歉", "无法回答", "没有提到", "未提供", "不详"]
         # 只有当：含有拒答词 且 引用数为0 且 长度较短时，才判定为真拒答
         is_refusal_detected = any(word in answer for word in refusal_keywords)
-        
+
         # 核心修正：如果模型给出了引用，说明它在资料中找到了内容，不应判定为 is_refusal
         actual_refusal = is_refusal_detected and citation_count == 0
 
@@ -82,40 +77,43 @@ class RAGAnswerEngine:
         if category == "neg":
             return {
                 "is_refusal": actual_refusal,
-                "hallucination": citation_count > 0, # NEG 组如果写了引用，反而是幻觉
+                "hallucination": citation_count > 0,  # NEG 组如果写了引用，反而是幻觉
                 "consistency_ok": True,
                 "citation_count": citation_count,
-                "status": "success"
+                "status": "success",
             }
 
         # --- 3. 处理 POS/BLUR 的判定 ---
         if actual_refusal:
             return {
-                "is_refusal": True, 
-                "hallucination": False, 
-                "consistency_ok": True, 
-                "citation_count": 0, 
-                "status": "success"
+                "is_refusal": True,
+                "hallucination": False,
+                "consistency_ok": True,
+                "citation_count": 0,
+                "status": "success",
             }
 
         # --- 4. 一致性检查 (数值校验) ---
         # 剔除引用 ID 干扰，避免将文档 ID 误认为事实数字
         clean_answer_for_audit = re.sub(r"\[\d+(?:#\d+)?\]", "", answer)
-        
+
         # 提取数字（含百分比）
         numbers_in_ans = re.findall(r"\d+(?:\.\d+)?%?", clean_answer_for_audit)
         # 预处理源码：合并内容并统一剔除千分位逗号
-        combined_source = "".join([d['content'] for d in docs]).replace(",", "")
-        
+        combined_source = "".join([d["content"] for d in docs]).replace(",", "")
+
         consistency_risk = False
         for num in numbers_in_ans:
             clean_n = num.replace(",", "").replace("%", "")
             # 长度 > 1 的数字（排除掉 0-9 或单纯的年份 2024）才进行深度校验
-            if len(clean_n) > 1: 
+            if len(clean_n) > 1:
                 # 校验逻辑：
                 # 1. 字符串直接包含
                 # 2. 或者 整数部分包含（处理 85.5% 被模型简写为 85.5 的情况）
-                if clean_n not in combined_source and clean_n.split('.')[0] not in combined_source:
+                if (
+                    clean_n not in combined_source
+                    and clean_n.split(".")[0] not in combined_source
+                ):
                     # 特殊逻辑：如果是计算出来的总和数字，在基础 RAG 中通常会判错
                     # 除非原文确实存在该数字
                     consistency_risk = True
@@ -123,10 +121,10 @@ class RAGAnswerEngine:
 
         # --- 5. 引用幻觉检查 (ID 是否合法) ---
         # 这里的 source_ids 通常只有主 ID，需要处理带 # 的匹配
-        source_ids = [str(d['metadata']['docid']) for d in docs]
+        source_ids = [str(d["metadata"]["docid"]) for d in docs]
         id_hallucination = False
         for cid in claimed_ids:
-            main_id = cid.split('#')[0]
+            main_id = cid.split("#")[0]
             if main_id not in source_ids:
                 id_hallucination = True
                 break
@@ -136,57 +134,100 @@ class RAGAnswerEngine:
             "hallucination": id_hallucination,
             "consistency_ok": not consistency_risk,
             "citation_count": citation_count,
-            "status": "success"
+            "status": "success",
         }
 
-    def generate_answer(self, query: str, category: str = "pos"):
+    @traceable(run_type="tool", name="RAG_Engine_Step") # 关键：声明这是一个子步骤
+    def generate_answer(self, query: str, category: str = "pos", history: str = ""):
         """
-        带超时监控和类别感知的生成逻辑
-        category: pos(有答案), neg(无关), blur(模糊)
+        升级版：支持多轮对话记忆与指代消解的生成逻辑
+        history: 格式通常为 "Human: xxx\nAI: xxx"
         """
         start_time = time.time()
-        
-        # 1. 检索阶段
+
+        # --- 新增步骤：指代消解 (Query Rewriting) ---
+        # 如果有历史记录，先让 LLM 把 query 补全，否则检索器搜不到“他/它”
+        search_query = query
+        if history:
+            try:
+                # 这是一个轻量级的内部调用，不带 RAG，只做文本改写
+                rewrite_tpl = "结合以下对话历史，将用户的问题改写为不带代词、意思完整的独立问题。若已经是独立问题则原样输出。\n历史：{history}\n问题：{query}\n独立问题："
+                rewrite_res = self.llm.invoke(rewrite_tpl.format(history=history, query=query))
+                search_query = rewrite_res.content.strip()
+                logger.info(f"🔍 问题重写：{query} -> {search_query}")
+            except Exception as e:
+                logger.error(f"问题重写失败: {e}")
+
+        # 1. 检索阶段 (使用重写后的 search_query)
         try:
-            results = self.retriever.pipeline(query, top_n=5)
+            results = self.retriever.pipeline(search_query, top_n=5)
         except Exception as e:
             logger.error(f"检索失败: {e}")
             return "检索异常", {"status": "error", "is_refusal": True, "consistency_ok": False, "hallucination": False, "citation_count": 0}
 
-        # 2. LLM 推理阶段 (带线程池超时控制)
-        context = "\n\n".join([f"--- 文档 [{d['metadata']['docid']}] ---\n{d['content']}" for d in results])
-        logger.warning(f"{context=}")
+        # 2. LLM 推理阶段
+        context = "\n\n".join(
+            [f"--- 文档 [{d['metadata']['docid']}] ---\n{d['content']}" for d in results]
+        )
+        
+        # 加载已更新的 YAML（确保 YAML 里的 input_variables 包含 context, history, query）
+        checker_prompt_template = load_prompt("prompts/rag/answer_with_ref.yaml")
+        
+        # 填充变量（注意：必须传入 history）
+        full_instructions = checker_prompt_template.format(
+            context=context, 
+            history=history, 
+            query=query
+        )
+        
         messages = [
-            SystemMessage(content=PROMPT_TEMPLATE.format(context=context, query=query)),
-            HumanMessage(content=query)
+            SystemMessage(content=full_instructions),
+            # 这里的 HumanMessage 建议传原始 query，让模型感知当前的语境
+            HumanMessage(content=f"请基于上述要求核查此问题：{query}"),
         ]
 
         with ThreadPoolExecutor(max_workers=1) as executor:
-            future = executor.submit(self.llm.invoke, messages)
+            future = executor.submit(copy_context().run, self.llm.invoke, messages)
             try:
                 response = future.result(timeout=self.request_timeout)
                 answer = response.content.strip()
                 duration = time.time() - start_time
-                
-                # 3. 调用增强版审计逻辑
+
+                # 3. 审计逻辑保持不变
                 m = self._verify_metrics(answer, results, category)
                 m["status"] = "success"
                 m["duration"] = duration
+                m["rewritten_query"] = search_query # 建议记录重写后的词，方便 debug
                 return answer, m
-            
+
             except TimeoutError:
                 logger.error(f"⚠️ 任务超时: {query[:15]}...")
-                return "抱歉，系统响应超时。", {"status": "timeout", "is_refusal": True, "consistency_ok": False, "hallucination": False, "citation_count": 0}
+                return "抱歉，系统响应超时。", {
+                    "status": "timeout",
+                    "is_refusal": True,
+                    "consistency_ok": False,
+                    "hallucination": False,
+                    "citation_count": 0,
+                }
             except Exception as err:
                 print(f"{query[:15]} --- Got Exception: {err=}")
-                return "抱歉，查询被拒绝。", {"is_refusal": True, "hallucination": False, "consistency_ok": False, "citation_count": 0, "status": "timeout"}
-    
+                return "抱歉，查询被拒绝。", {
+                    "is_refusal": True,
+                    "hallucination": False,
+                    "consistency_ok": False,
+                    "citation_count": 0,
+                    "status": "timeout",
+                }
+
     def _print_audit_table(self, query, m, duration):
         logger.info(f"📊 审计报告 | Query: {query[:15]}...")
-        print(f"| 幻觉率: {'❌ 风险' if m['hallucination'] else '✅ 通过'} "
-              f"| 证据一致性: {'✅ 达标' if m['consistency_ok'] else '❌ 风险'} "
-              f"| 引用数: {m['citation_count']} "
-              f"| 耗时: {duration:.2f}s |")
+        print(
+            f"| 幻觉率: {'❌ 风险' if m['hallucination'] else '✅ 通过'} "
+            f"| 证据一致性: {'✅ 达标' if m['consistency_ok'] else '❌ 风险'} "
+            f"| 引用数: {m['citation_count']} "
+            f"| 耗时: {duration:.2f}s |"
+        )
+
 
 # ==========================================
 # 3. 执行脚本 (Main)
@@ -200,7 +241,7 @@ if __name__ == "__main__":
     # 添加到 sys.path
     if project_root not in sys.path:
         sys.path.append(project_root)
-    
+
     from core.retriever_with_testcase import HybridRetrieverV3
     from config import Config
     from llm_service import get_qwen_llm
@@ -208,8 +249,7 @@ if __name__ == "__main__":
     # 1. 初始化检索器（带日志追踪）
     logger.info("--- 步骤 1: 加载检索模型 ---")
     retriever = HybridRetrieverV3(
-        model_path=Config.LOCAL_MODEL_PATH, 
-        reranker_path=Config.RERANKER_MODEL_PATH
+        model_path=Config.LOCAL_MODEL_PATH, reranker_path=Config.RERANKER_MODEL_PATH
     )
 
     # 2. 构建/加载索引
@@ -228,11 +268,11 @@ if __name__ == "__main__":
 
     # 4. 运行引擎
     engine = RAGAnswerEngine(retriever=retriever, llm_client=llm)
-    
+
     # 测试 Query
     test_query = "谁写了《网络独立宣言》？"
     final_res = engine.generate_answer(test_query)
-    
-    print("\n" + "="*50)
+
+    print("\n" + "=" * 50)
     print(f"最终回答：\n{final_res}")
-    print("="*50)
+    print("=" * 50)
