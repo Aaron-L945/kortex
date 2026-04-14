@@ -11,7 +11,7 @@ def get_qwen_llm(streaming=True):
     # )
     return ChatOpenAI(
         model="qwen3-max",  # 替换为你本地实际的模型名称
-        openai_api_key="sk-78fe3d06e3ffdbb0f733fa067fe4dacd",  # Ollama 不需要 key，随便填
+        openai_api_key="sk-b51aac8fea8dcb4fb574275c123f960e",  # Ollama 不需要 key，随便填
         openai_api_base="https://apis.iflow.cn/v1",
         temperature=0,  # 知识库问答建议低随机性
         streaming=streaming,

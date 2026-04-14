@@ -20,8 +20,8 @@ def main():
     # 1. 初始化切片器
     # 建议：分层架构下，chunk_size 可以设得稍小（如 500-600），提高检索精度
     text_splitter = RecursiveCharacterTextSplitter(
-        chunk_size=600,  
-        chunk_overlap=150, 
+        chunk_size=Config.CHUNK_SIZE,  
+        chunk_overlap=Config.CHUNK_OVERLAP, 
         separators=["\n\n", "\n", "。", "！", "？", " ", ""],
         add_start_index=True,
     )

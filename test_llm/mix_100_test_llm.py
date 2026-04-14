@@ -6,14 +6,6 @@ import pandas as pd
 import time
 from llm_validation_testcase import RAGAnswerEngine
 
-import json
-import os
-import time
-import random
-import pandas as pd
-from tqdm import tqdm
-from loguru import logger
-
 
 def run_batch_test(engine, input_file, output_file="final_audit_results.jsonl"):
     # 1. 加载带标签的测试集
