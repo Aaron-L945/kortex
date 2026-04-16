@@ -1,3 +1,7 @@
+"""
+main.py
+"""
+
 import time
 import json
 import uvicorn
@@ -9,77 +13,59 @@ from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from pydantic import BaseModel
 from typing import Dict, Optional, List
 from loguru import logger
-from fastapi.concurrency import run_in_threadpool
-from fastapi.concurrency import iterate_in_threadpool
 
-# 导入你之前定义的业务模块
+# 导入业务模块
 from app.user_manager import UserManager
+
+# 🚩 导入我们新写的模型池路由模块
 from core.rag_chat_service import SecureChatService
+from build_milvus_index import EnterpriseSecureRAG
 
 # ==========================================
 # 1. 初始化服务
 # ==========================================
+user_db = UserManager()
+security = HTTPBearer()
+rag_backend = EnterpriseSecureRAG()
+rag_service = SecureChatService(rag_backend=rag_backend)
 
 
-# 1. 定义一个全局变量占位，先不初始化
-rag_service = None
-user_db = None
-
-
-# 2. 定义生命周期管理器
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    global rag_service
-    # 这里才是真正加载模型的地方
-    if rag_service is None:
-        from core.rag_chat_service import SecureChatService
-
-        rag_service = SecureChatService()
+    """
+    生命周期管理：
+    在 1TB 内存环境下，确保启动时模型池中的本地节点已就绪
+    """
+    logger.info("🚀 正在初始化 Enterprise RAG 模型池调度系统...")
+    # 这里可以进行一些节点连接性测试
     yield
-    # 这里可以写清理逻辑（如关闭 Milvus 连接）
-    del rag_service
+    logger.info("🛑 正在关闭服务...")
 
 
-# 3. 将 lifespan 传入 FastAPI
 app = FastAPI(title="Enterprise Secure RAG API", lifespan=lifespan)
-
-# 单例初始化：用户管理与RAG引擎
-user_db = UserManager()
-
-# 定义安全认证方案
-security = HTTPBearer()
 
 
 # ==========================================
-# 2. 安全鉴权中间件 (身份认证与权限决策层)
+# 2. 安全鉴权中间件
 # ==========================================
 async def get_current_active_user(
     auth: HTTPAuthorizationCredentials = Security(security),
 ):
-    """
-    核心防护层：校验 JWT Token，确保用户身份真实且未过期
-    """
     credentials_exception = HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,
         detail="身份凭证无效、已过期或缺失",
         headers={"WWW-Authenticate": "Bearer"},
     )
-
-    # 解码 Token，内部包含 SECRET_KEY 签名校验
     payload = user_db.decode_token(auth.credentials)
-
     if payload is None:
         raise credentials_exception
     if payload == "EXPIRED":
         raise HTTPException(status_code=401, detail="Token 已过期，请重新登录")
-
-    # 返回的内容包含：user_id, dept, role
-    # 这确保了后续检索使用的 user_context 是绝对可信的
     return payload
 
 
 # ==========================================
-# 3. 数据模型定义
+# 3. 数据模型
 # ==========================================
 class ChatRequest(BaseModel):
     query: str
@@ -94,81 +80,72 @@ class LoginRequest(BaseModel):
 # ==========================================
 # 4. API 路由实现
 # ==========================================
-@app.post("/login", tags=["Auth"])
+
+
+@app.post("/v1/auth/login", tags=["Auth"])
 async def login(req: LoginRequest):
-    """
-    用户登录入口：校验 SQLite 中的哈希密码，签发 JWT
-    """
     token = user_db.authenticate_user(req.username, req.password)
     if not token:
         raise HTTPException(status_code=401, detail="用户名或密码错误")
-
-    logger.info(f"用户 {req.username} 登录成功，签发 Token")
+    logger.info(f"用户 {req.username} 登录成功")
     return {"access_token": token, "token_type": "bearer"}
 
 
 @app.post("/v1/chat/completions", tags=["RAG"])
 async def chat_endpoint(
-    request: ChatRequest, 
-    user_context: dict = Depends(get_current_active_user)
+    request: ChatRequest, user_context: dict = Depends(get_current_active_user)
 ):
-    logger.info(f"RAG请求 | 用户: {user_context['user_id']} | 问题: {request.query}")
+    """
+    经过模型池调度的 RAG 接口：
+    1. 接收请求并构造 Payload
+    2. 由 Router 决定分发到本地 vLLM 还是云端 API
+    3. 实时流式转发
+    """
+    logger.info(f"收到请求 | 用户: {user_context['user_id']} | 调度开始")
+
+    # 构造发送给模型节点的标准 OpenAI 格式 Payload
+    # 可以在这里注入 RAG 检索到的 Context（如果 RAG 逻辑在 main 之外）
+    model_payload = {
+        "model": "qwen-rag",  # 逻辑模型名
+        "messages": [
+            {
+                "role": "system",
+                "content": f"你是一个企业助手。用户信息: {user_context['dept']}",
+            },
+            {"role": "user", "content": request.query},
+        ],
+        "stream": True,
+        "temperature": 0.1,
+    }
 
     async def event_generator():
-        # 1. 记录开始时间
-        start_time = time.perf_counter()
-        has_sent_sources = False
-        
+        # 🚩 调用业务层逻辑
         try:
-            # 获取同步生成器
-            sync_gen = rag_service.ask_question_stream(request.query, user_context)
-
-            # 使用 iterate_in_threadpool 确保同步迭代不阻塞异步主循环
-            async for chunk_data, sources in iterate_in_threadpool(sync_gen):
-                
-                # --- 修复 1: 严格过滤空内容 ---
-                # 如果没有文字内容，且没有来源信息，就不要发这个包
-                if not chunk_data and not (not has_sent_sources and sources):
-                    continue
-
-                # --- 修复 2: 构造标准 OpenAI 响应格式 ---
+            async for chunk, sources in rag_service.ask_question_stream(
+                request.query, user_context
+            ):
                 payload = {
-                    "choices": [{
-                        "index": 0,
-                        "delta": {"content": chunk_data},
-                        "finish_reason": None
-                    }]
+                    "choices": [{"delta": {"content": chunk}}],
+                    "sources": sources,  # 可以在第一帧带上来源
                 }
-
-                # 仅在第一帧或有来源时注入 sources
-                if not has_sent_sources and sources:
-                    payload["sources"] = sources
-                    has_sent_sources = True
-                
-                # --- 修复 3: 严格控制换行符 ---
-                # data: {JSON}\n\n (注意：中间不要有空格，末尾不多不少两个换行)
-                yield f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
-                
-                # 强制让出控制权，确保数据立刻离开 Docker 容器进入网络
-                await asyncio.sleep(0)
-
-            # 2. 发送结束信号
+                yield f"data: {json.dumps(payload)}\n\n"
             yield "data: [DONE]\n\n"
-            
-            logger.success(f"流式推送完成 | 耗时: {time.perf_counter() - start_time:.2f}s")
-
         except Exception as e:
-            logger.error(f"流生成异常: {e}")
-            yield f"data: {json.dumps({'error': str(e)})}\n\n"
+            logger.error(f"模型池转发异常: {e}")
+            err_payload = {
+                "choices": [{"delta": {"content": f"\n[调度系统异常: {str(e)}]"}}]
+            }
+            yield f"data: {json.dumps(err_payload)}\n\n"
 
     return StreamingResponse(
-        event_generator(), 
+        event_generator(),
         media_type="text/event-stream",
         headers={
             "Cache-Control": "no-cache",
-            "X-Accel-Buffering": "no", 
-            "Connection": "keep-alive"
-        }
+            "X-Accel-Buffering": "no",  # 禁用 Nginx 缓存
+            "Connection": "keep-alive",
+            "Transfer-Encoding": "chunked",
+        },
     )
 
 
@@ -176,6 +153,14 @@ async def chat_endpoint(
 # 5. 启动配置
 # ==========================================
 if __name__ == "__main__":
-    # 在 1TB 内存的高配环境下，设置多进程 workers 提升并发处理能力
-    # host 0.0.0.0 允许内网其他机器访问
-    uvicorn.run("app.main:app", host="0.0.0.0", port=8000, workers=1, reload=False)
+    # 针对 1TB 内存环境：
+    # 1. 虽然内存大，但 uvicorn worker 建议设为 1，内部利用 asyncio 处理并发更安全
+    # 2. 如果 CPU 核心极多且是多租户场景，可考虑 workers=2~4，但注意单例模式下的内存占用
+    uvicorn.run(
+        "main:app",
+        host="0.0.0.0",
+        port=8000,  # 这里的端口要对应你之前在 Streamlit 里填写的
+        workers=1,
+        reload=False,
+        timeout_keep_alive=120,
+    )
