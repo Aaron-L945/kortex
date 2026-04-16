@@ -1,5 +1,6 @@
 import os
 from typing import List, Dict, Any
+from loguru import logger
 from dotenv import load_dotenv
 from pymilvus import connections, Collection, FieldSchema, CollectionSchema, DataType, utility
 from langchain_community.document_loaders import PyPDFLoader
@@ -116,11 +117,17 @@ class EnterpriseSecureRAG:
         query_vec = self.embedder.embed_query(query)
 
         # 构造权限表达式 (第二层控制)
-        ac_expr = (
-            f"owner_id == '{user_context['user_id']}' or "
-            f"ARRAY_CONTAINS(department, '{user_context['dept']}') or "
-            f"ARRAY_CONTAINS(role_access, '{user_context['role']}')"
-        )
+        if user_context.get('role') == 'admin':
+            # 如果是 admin，表达式为空，Milvus 将不执行元数据过滤，直接检索全库
+            ac_expr = "" 
+            logger.info(f"管理员 {user_context['user_id']} 正在进行全库安全检索")
+        else:
+            # 普通用户依然保持严格的三路过滤
+            ac_expr = (
+                f"owner_id == '{user_context['user_id']}' or "
+                f"ARRAY_CONTAINS(department, '{user_context['dept']}') or "
+                f"ARRAY_CONTAINS(role_access, '{user_context['role']}')"
+    )
         
         # 叠加业务标签过滤 (第三层控制)
         if semantic_filters:
