@@ -4,6 +4,7 @@ import json
 from tqdm import tqdm
 import pandas as pd
 import time
+import random
 from llm_validation_testcase import RAGAnswerEngine
 
 
