@@ -19,18 +19,18 @@ class LLMPoolRouter:
         self.nodes = [
             ModelNode(
                 "Local-vLLM",
-                "http://10.66.196.31:20351/v1",
+                "http://10.66.196.31:20201/v1",
                 "local-token",
-                "/models/Qwen3.5-35B-A3B-FP8",
+                "/models/gpt-oss-20b",
                 max_concurrent=8,
             ),
-            ModelNode(
-                "Cloud-Backup",
-                "https://apis.iflow.cn/v1",
-                "sk-b51aac8fea8dcb4fb574275c123f960e",
-                "qwen3-max",
-                max_concurrent=1,
-            ),
+            # ModelNode(
+            #     "Cloud-Backup",
+            #     "https://xiaoai.plus/v1",
+            #     "sk-wFb8tC3URGiD7RIUgnuoWmOs5RF0HcLHScxPZ76rwhI0boST",
+            #     "gpt-4o",
+            #     max_concurrent=1,
+            # ),
         ]
         self.node_cycle = itertools.cycle(range(len(self.nodes)))
 
