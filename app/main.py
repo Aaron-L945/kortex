@@ -33,13 +33,29 @@ rag_service = SecureChatService(rag_backend=rag_backend)
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """
-    生命周期管理：
-    在 1TB 内存环境下，确保启动时模型池中的本地节点已就绪
+    针对 1TB 内存 + Redis Stack 的生命周期管理
     """
-    logger.info("🚀 正在初始化 Enterprise RAG 模型池调度系统...")
-    # 这里可以进行一些节点连接性测试
+    logger.info("🚀 正在启动 Enterprise RAG 系统...")
+    
+    # 🚩 [新增] 初始化语义缓存索引 (Redis Stack 向量库)
+    try:
+        # 确保 semantic_cache 已经正确挂载在 rag_service 中
+        await rag_service.semantic_cache.init_index()
+        logger.info("🎯 语义缓存向量索引已就绪")
+    except Exception as e:
+        logger.error(f"❌ 语义缓存索引初始化失败: {e}。请检查 Redis Stack 是否正常运行。")
+
     yield
-    logger.info("🛑 正在关闭服务...")
+
+    # 🚩 [新增] 优雅关闭 Redis 连接
+    logger.info("🛑 正在释放资源...")
+    try:
+        await rag_backend.emb_cache_manager.redis.close()
+        logger.info("✅ Redis 连接已安全关闭")
+    except Exception as e:
+        logger.error(f"释放资源异常: {e}")
+    
+    logger.info("🏠 服务已完全停止")
 
 
 app = FastAPI(title="Enterprise Secure RAG API", lifespan=lifespan)
