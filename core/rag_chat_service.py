@@ -17,12 +17,6 @@ class SecureChatService:
             embedding_manager=rag_backend.emb_cache_manager
         )
 
-#     import json
-# import hashlib
-# from loguru import logger
-# from langchain_openai import ChatOpenAI
-# from langchain.schema import SystemMessage, HumanMessage
-# 假设 llm_router 已在外部定义并导入
 
     async def ask_question_stream(self, query: str, user_context: dict):
         # --- [1] 生成 Cache Key ---
