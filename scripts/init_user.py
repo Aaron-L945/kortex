@@ -77,9 +77,11 @@ def interactive_mode():
     print("  1. admin (管理员)")
     print("  2. internal (内部用户)")
     print("  3. user (普通用户)")
+    print("  4. private (私有)")
+    print("  5. guest (访客)")
     
-    role_choice = input("选择角色 [1-3]: ").strip()
-    role_map = {"1": "admin", "2": "internal", "3": "user"}
+    role_choice = input("选择角色 [1-5]: ").strip()
+    role_map = {"1": "admin", "2": "internal", "3": "user", "4": "private", "5": "guest"}
     role = role_map.get(role_choice, "internal")
     
     print()
