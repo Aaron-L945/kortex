@@ -46,7 +46,16 @@ source .venv/bin/activate
 pip install -r requirements.txt
 ```
 
-### 2. 启动服务
+### 2. 配置
+
+```bash
+# 复制配置
+cp .env.example .env
+
+# 编辑 .env 填写模型路径和密钥
+```
+
+### 3. 启动服务
 
 ```bash
 # 启动 Docker 服务
@@ -58,15 +67,6 @@ python -m uvicorn app.main:app --host 0.0.0.0 --port 8000
 
 # 启动前端 (终端 2)
 streamlit run client.py --server.port 8501
-```
-
-### 3. 配置
-
-```bash
-# 复制配置
-cp .env.example .env
-
-# 编辑 .env 填写模型路径和密钥
 ```
 
 ### 4. 验证
