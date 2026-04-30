@@ -29,9 +29,9 @@ class SecureChatService:
 
 
     async def ask_question_stream(self, query: str, history: list, user_context: dict):
-        # --- [1] 尝试从语义缓存获取 (支持精确+语义双层匹配) ---
+        # --- [1] 尝试从语义缓存获取 (按用户隔离) ---
         try:
-            cached_res = await self.semantic_cache.get_cache(query)
+            cached_res = await self.semantic_cache.get_cache(query, user_context)
             if cached_res:
                 logger.info(f"🔥 [ULTRA HIT] 语义缓存命中: {query[:20]}...")
                 # 模拟流式：直接 yield 整个答案
@@ -96,8 +96,8 @@ class SecureChatService:
         if full_answer_content:
             try:
                 complete_answer = "".join(full_answer_content)
-                # 使用 semantic_cache 存储（自动生成向量并以 JSON 格式存入 Redis）
-                await self.semantic_cache.set_cache(query, complete_answer, source_list)
+                # 使用 semantic_cache 存储（按用户隔离）
+                await self.semantic_cache.set_cache(query, complete_answer, source_list, user_context)
                 logger.debug(f"💾 结果已存入语义缓存")
             except Exception as e:
                 logger.error(f"❌ 写入语义缓存异常: {e}")

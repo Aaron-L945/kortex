@@ -22,8 +22,14 @@ class SemanticCache:
         # 阈值：L2距离越小越相似。BGE模型建议 0.1 - 0.2 左右，0.98这种余弦值需要转换
         self.threshold = 0.15 
 
-    def _get_query_hash(self, query: str) -> str:
-        return hashlib.md5(query.strip().lower().encode()).hexdigest()
+    def _get_query_hash(self, query: str, user_context: dict = None) -> str:
+        """生成查询哈希，加入用户上下文以实现权限隔离"""
+        base = query.strip().lower()
+        if user_context:
+            # 将用户身份加入哈希，实现用户级别的缓存隔离
+            ctx = f"{user_context.get('user_id', '')}:{user_context.get('dept', '')}:{user_context.get('role', '')}"
+            base = f"{base}:{ctx}"
+        return hashlib.md5(base.encode()).hexdigest()
 
     async def init_index(self):
         """初始化 Redis Stack 向量索引"""
@@ -48,9 +54,9 @@ class SemanticCache:
             )
             logger.info("✅ 向量索引创建成功")
 
-    async def get_cache(self, query: str):
-        """双层检索：精确哈希 + 语义向量"""
-        q_hash = self._get_query_hash(query)
+    async def get_cache(self, query: str, user_context: dict = None):
+        """双层检索：精确哈希 + 语义向量 (按用户隔离)"""
+        q_hash = self._get_query_hash(query, user_context)
         cache_key = f"{self.cache_prefix}{q_hash}"
 
         # 1. 尝试极速精确匹配 (RedisJSON get)
@@ -97,10 +103,10 @@ class SemanticCache:
 
         return None
 
-    async def set_cache(self, query: str, answer: str, sources: list, expire=86400):
-        """存入 RedisJSON 格式数据"""
+    async def set_cache(self, query: str, answer: str, sources: list, user_context: dict = None, expire=86400):
+        """存入 RedisJSON 格式数据 (按用户隔离)"""
         try:
-            q_hash = self._get_query_hash(query)
+            q_hash = self._get_query_hash(query, user_context)
             cache_key = f"{self.cache_prefix}{q_hash}"
             
             # 获取向量并转为 list 存储
