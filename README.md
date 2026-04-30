@@ -69,7 +69,13 @@ python -m uvicorn app.main:app --host 0.0.0.0 --port 8000
 streamlit run client.py --server.port 8501
 ```
 
-### 4. 验证
+### 4. 创建管理员用户
+
+```bash
+python scripts/init_user.py add admin admin123 Tech admin
+```
+
+### 5. 验证
 
 浏览器打开 `http://localhost:8501`
 
