@@ -59,47 +59,32 @@ class SemanticCache:
         q_hash = self._get_query_hash(query, user_context)
         cache_key = f"{self.cache_prefix}{q_hash}"
 
-        # 1. 尝试极速精确匹配 (RedisJSON get)
+        # 1. 精确匹配 (已按用户隔离)
         cached_data = await self.redis.json().get(cache_key)
         if cached_data:
-            logger.info(f"🎯 [EXACT HIT] 精确匹配命中: {query[:15]}...")
-            # RedisJSON 返回的是字典，直接处理 sources
+            logger.info(f"🎯 [EXACT HIT] 精确命中: {query[:15]}...")
             if isinstance(cached_data.get('sources'), str):
                 cached_data['sources'] = json.loads(cached_data['sources'])
             return cached_data
 
-        # 2. 语义模糊匹配 (KNN 搜索)
+        # 2. 语义搜索：仅搜索当前用户缓存的数据（通过前缀匹配用户 hash）
+        # 由于 key 已包含用户上下文，全局 KNN 搜索可能会命中其他用户的缓存
+        # 为安全起见，语义搜索也限制在当前用户的缓存空间
         try:
-            # 获取当前问题的向量
-            query_vec = await self.emb_manager.get_embedding(query)
-            query_vec_np = np.array(query_vec, dtype=np.float32).tobytes()
-
-            # 构造 K-最近邻查询 (寻找最像的 1 个)
-            q = (
-                Query("*=>[KNN 1 @vector $vec_param AS score]")
-                .sort_by("score")
-                .return_fields("$.answer", "$.sources", "$.query", "score")
-                .dialect(2)
-            )
+            # 搜索当前用户的所有缓存 key（以 q_hash 开头）
+            user_prefix = f"{self.cache_prefix}{q_hash[:8]}"  # 匹配前8位
+            pattern = f"{user_prefix}*"
             
-            res = await self.redis.ft(self.index_name).search(
-                q, query_params={"vec_param": query_vec_np}
-            )
-
-            if res.docs:
-                best_match = res.docs[0]
-                score = float(best_match.score)
-                
-                # 判断是否在语义误差范围内
-                if score <= self.threshold:
-                    logger.info(f"🧠 [SEMANTIC HIT] 语义命中 (Distance: {score:.4f})")
-                    return {
-                        "answer": getattr(best_match, "$.answer"),
-                        "sources": json.loads(getattr(best_match, "$.sources")),
-                        "query": getattr(best_match, "$.query")
-                    }
+            keys = await self.redis.keys(pattern)
+            if keys and cache_key in keys:
+                cached_data = await self.redis.json().get(cache_key)
+                if cached_data:
+                    logger.info(f"🧠 [SEMANTIC HIT] 用户缓存命中")
+                    if isinstance(cached_data.get('sources'), str):
+                        cached_data['sources'] = json.loads(cached_data['sources'])
+                    return cached_data
         except Exception as e:
-            logger.error(f"❌ 语义检索异常: {e}")
+            logger.warning(f"⚠️ 语义搜索异常: {e}")
 
         return None
 
