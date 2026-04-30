@@ -10,7 +10,7 @@ EMBEDDING_MODEL_PATH = os.getenv("EMBEDDING_MODEL_NAME")
 
 class RAGExceptionTester:
     def __init__(self):
-        connections.connect("default", host="10.66.196.31", port="19530")
+        connections.connect("default", host="127.0.0.1", port="19530")
         self.collection = Collection("enterprise_knowledge_vault")
         self.embedder = HuggingFaceEmbeddings(model_name=EMBEDDING_MODEL_PATH)
 

@@ -2,6 +2,7 @@ import os
 from pymilvus import connections, Collection, utility
 from langchain_huggingface import HuggingFaceEmbeddings
 from dotenv import load_dotenv
+from config import Config
 
 # 加载配置
 load_dotenv()
@@ -9,7 +10,7 @@ EMBEDDING_MODEL_PATH = os.getenv("EMBEDDING_MODEL_NAME")
 
 def run_test():
     # 1. 连接配置
-    host = "10.66.196.31"
+    host = Config.MILVUS_HOST
     port = "19530"
     collection_name = "enterprise_knowledge_vault"
 
@@ -34,7 +35,7 @@ def run_test():
     print(f"--- 正在加载 Embedding 模型 ---")
     embedder = HuggingFaceEmbeddings(
         model_name=EMBEDDING_MODEL_PATH,
-        model_kwargs={'device': 'cuda'} # 如果没显卡改为 'cpu'
+        model_kwargs={'device': 'cpu'} # 如果没显卡改为 'cpu'
     )
 
     # 4. 模拟不同身份的用户进行检索测试
@@ -42,12 +43,12 @@ def run_test():
         {
             "name": "管理员测试 (admin)",
             "context": {"user_id": "admin", "dept": "Tech", "role": "internal"},
-            "query": "VSD 如何做升级？"
+            "query": "费曼学习法的核心步骤是什么？"
         },
         {
             "name": "普通用户测试 (游客)",
             "context": {"user_id": "guest_user", "dept": "Public", "role": "guest"},
-            "query": "近年畅销书都有哪些？"
+            "query": "费曼学习法的核心步骤是什么？"
         }
     ]
 
@@ -70,7 +71,7 @@ def run_test():
         results = collection.search(
             data=[query_vec],
             anns_field="vector",
-            param={"metric_type": "L2", "params": {"ef": 64}},
+            param={"metric_type": "COSINE", "params": {"nprobe": 16}},
             limit=3,
             expr=ac_expr,
             output_fields=["text", "file_name", "department"]
