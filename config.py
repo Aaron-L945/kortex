@@ -28,3 +28,11 @@ class Config:
     # 其他
     INCLUDE_THINK = os.getenv("INCLUDE_THINK", "True").lower() == "true"
     RERANK_THRESHOLD = float(os.getenv("RERANK_THRESHOLD", 0.3))
+    REDIS_PASSWORD = os.getenv("REDIS_PASSWORD")
+
+    # Redis 配置
+    REDIS_HOST = os.getenv("REDIS_HOST", "localhost")
+    REDIS_PORT = int(os.getenv("REDIS_PORT", 6379))
+    REDIS_DB = int(os.getenv("REDIS_DB", 0))
+
+    MILVUS_HOST = os.getenv("MILVUS_HOST", "localhost")

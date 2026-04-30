@@ -1,16 +1,20 @@
 import hashlib
 import json
-import redis.asyncio as redis
+import redis.asyncio as aioredis
 from cachetools import TTLCache
 from loguru import logger
+from config import Config
 
 class EmbeddingCacheManager:
-    def __init__(self, model_instance, redis_url="redis://10.66.196.31:6379/1"):
+    def __init__(self, model_instance):
         self.model = model_instance
-        # L1 Cache: 本地内存，存储最热的 2000 个向量，1小时过期
         self.l1_cache = TTLCache(maxsize=2000, ttl=3600)
-        # L2 Cache: Redis 持久化
-        self.redis = redis.from_url(redis_url)
+        self.redis = aioredis.Redis(
+            host=Config.REDIS_HOST,
+            port=Config.REDIS_PORT,
+            db=Config.REDIS_DB,
+            password=Config.REDIS_PASSWORD
+        )
 
     def _get_query_hash(self, text: str) -> str:
         return hashlib.md5(text.strip().lower().encode()).hexdigest()

@@ -8,7 +8,7 @@ class ModelNode:
         self, name: str, url: str, api_key: str, model_name: str, max_concurrent: int = 1
     ):
         self.name = name
-        self.url = url  # 保持 http://10.66.196.31:20351/v1
+        self.url = url  # 保持 http://localhost:20351/v1
         self.api_key = api_key
         self.model_name = model_name
         self.semaphore = asyncio.Semaphore(max_concurrent)
@@ -17,20 +17,20 @@ class ModelNode:
 class LLMPoolRouter:
     def __init__(self):
         self.nodes = [
-            ModelNode(
-                "Local-vLLM",
-                "http://10.66.196.31:20201/v1",
-                "local-token",
-                "/models/gpt-oss-20b",
-                max_concurrent=8,
-            ),
             # ModelNode(
-            #     "Cloud-Backup",
-            #     "https://xiaoai.plus/v1",
-            #     "sk-wFb8tC3URGiD7RIUgnuoWmOs5RF0HcLHScxPZ76rwhI0boST",
-            #     "gpt-4o",
-            #     max_concurrent=1,
+            #     "Local-vLLM",
+            #     "http://10.66.196.31:20201/v1",
+            #     "local-token",
+            #     "/models/gpt-oss-20b",
+            #     max_concurrent=8,
             # ),
+            ModelNode(
+                "Cloud-Backup",
+                "https://xiaoai.plus/v1",
+                "sk-wFb8tC3URGiD7RIUgnuoWmOs5RF0HcLHScxPZ76rwhI0boST",
+                "gpt-4o-mini",
+                max_concurrent=1,
+            ),
         ]
         self.node_cycle = itertools.cycle(range(len(self.nodes)))
 

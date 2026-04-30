@@ -26,3 +26,5 @@ corpus*
 vector_store/
 user_dict.txt
 *.jsonl
+volumes/
+sql_data/
