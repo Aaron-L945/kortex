@@ -20,14 +20,16 @@ from app.user_manager import UserManager
 # 🚩 导入我们新写的模型池路由模块
 from core.rag_chat_service import SecureChatService
 from build_milvus_index import EnterpriseSecureRAG
+from core.embedding_manager import EmbeddingCacheManager
 
 # ==========================================
-# 1. 初始化服务
+# 1. 初始化服务 (仅创建变量，实际初始化在 lifespan 中)
 # ==========================================
 user_db = UserManager()
 security = HTTPBearer()
-rag_backend = EnterpriseSecureRAG()
-rag_service = SecureChatService(rag_backend=rag_backend)
+rag_backend = None  # 延迟初始化
+rag_service = None  # 延迟初始化
+emb_cache_manager = None  # 延迟初始化
 
 
 @asynccontextmanager
@@ -35,7 +37,19 @@ async def lifespan(app: FastAPI):
     """
     针对 1TB 内存 + Redis Stack 的生命周期管理
     """
+    global rag_backend, rag_service, emb_cache_manager
+    
     logger.info("🚀 正在启动 Enterprise RAG 系统...")
+    
+    # 🚩 延迟初始化 RAG 组件 (避免模块导入时重复初始化)
+    try:
+        rag_backend = EnterpriseSecureRAG()
+        rag_service = SecureChatService(rag_backend=rag_backend)
+        emb_cache_manager = EmbeddingCacheManager(rag_backend)
+        logger.info("✅ RAG 服务组件初始化完成")
+    except Exception as e:
+        logger.error(f"❌ RAG 服务初始化失败: {e}")
+        raise
     
     # 🚩 [新增] 初始化语义缓存索引 (Redis Stack 向量库)
     try:
@@ -50,7 +64,7 @@ async def lifespan(app: FastAPI):
     # 🚩 [新增] 优雅关闭 Redis 连接
     logger.info("🛑 正在释放资源...")
     try:
-        await rag_backend.emb_cache_manager.redis.close()
+        await emb_cache_manager.redis.close()
         logger.info("✅ Redis 连接已安全关闭")
     except Exception as e:
         logger.error(f"释放资源异常: {e}")
@@ -86,6 +100,7 @@ async def get_current_active_user(
 class ChatRequest(BaseModel):
     query: str
     stream: bool = True
+    history: list = []
 
 
 class LoginRequest(BaseModel):
@@ -138,7 +153,7 @@ async def chat_endpoint(
         # 🚩 调用业务层逻辑
         try:
             async for chunk, sources in rag_service.ask_question_stream(
-                request.query, user_context
+                request.query, request.history, user_context
             ):
                 payload = {
                     "choices": [{"delta": {"content": chunk}}],

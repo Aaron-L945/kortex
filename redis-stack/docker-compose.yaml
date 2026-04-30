@@ -1,0 +1,102 @@
+version: '3.8'
+
+services:
+  # 主节点
+  redis-master:
+    container_name: redis-master
+    image: redis/redis-stack:latest
+    environment:
+      - REDIS_ARGS=--requirepass yourpassword --masterauth yourpassword
+    ports:
+      - "6379:6379"
+      - "8001:8001" # Redis Insight 可视化界面
+    volumes:
+      - ./data-master:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "-a", "yourpassword", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    networks:
+      redis-network:
+        ipv4_address: 172.20.0.10
+    restart: always
+
+  # 从节点 1
+  redis-slave1:
+    container_name: redis-slave1
+    image: redis/redis-stack:latest
+    environment:
+      - REDIS_ARGS=--replicaof 172.20.0.10 6379 --requirepass yourpassword --masterauth yourpassword
+    depends_on:
+      redis-master:
+        condition: service_healthy
+    volumes:
+      - ./data-slave1:/data
+    networks:
+      - redis-network
+    restart: always
+
+  # 从节点 2
+  redis-slave2:
+    container_name: redis-slave2
+    image: redis/redis-stack:latest
+    environment:
+      - REDIS_ARGS=--replicaof 172.20.0.10 6379 --requirepass yourpassword --masterauth yourpassword
+    depends_on:
+      redis-master:
+        condition: service_healthy
+    volumes:
+      - ./data-slave2:/data
+    networks:
+      - redis-network
+    restart: always
+
+  sentinel1:
+    container_name: redis-sentinel1
+    image: redis:latest
+    command: [
+      "sh", "-c",
+      "until redis-cli -h 172.20.0.10 -a yourpassword ping 2>/dev/null | grep -q PONG; do sleep 1; done && printf 'port 26379\\nsentinel monitor mymaster 172.20.0.10 6379 2\\nsentinel auth-pass mymaster yourpassword\\nsentinel down-after-milliseconds mymaster 5000\\nsentinel failover-timeout mymaster 60000\\nsentinel parallel-syncs mymaster 1' > /tmp/sentinel.conf && redis-sentinel /tmp/sentinel.conf"
+    ]
+    depends_on:
+      redis-master:
+        condition: service_healthy
+    networks:
+      - redis-network
+    restart: always
+
+  sentinel2:
+    container_name: redis-sentinel2
+    image: redis:latest
+    command: [
+      "sh", "-c",
+      "until redis-cli -h 172.20.0.10 -a yourpassword ping 2>/dev/null | grep -q PONG; do sleep 1; done && printf 'port 26379\\nsentinel monitor mymaster 172.20.0.10 6379 2\\nsentinel auth-pass mymaster yourpassword\\nsentinel down-after-milliseconds mymaster 5000\\nsentinel failover-timeout mymaster 60000\\nsentinel parallel-syncs mymaster 1' > /tmp/sentinel.conf && redis-sentinel /tmp/sentinel.conf"
+    ]
+    depends_on:
+      redis-master:
+        condition: service_healthy
+    networks:
+      - redis-network
+    restart: always
+
+  sentinel3:
+    container_name: redis-sentinel3
+    image: redis:latest
+    command: [
+      "sh", "-c",
+      "until redis-cli -h 172.20.0.10 -a yourpassword ping 2>/dev/null | grep -q PONG; do sleep 1; done && printf 'port 26379\\nsentinel monitor mymaster 172.20.0.10 6379 2\\nsentinel auth-pass mymaster yourpassword\\nsentinel down-after-milliseconds mymaster 5000\\nsentinel failover-timeout mymaster 60000\\nsentinel parallel-syncs mymaster 1' > /tmp/sentinel.conf && redis-sentinel /tmp/sentinel.conf"
+    ]
+    depends_on:
+      redis-master:
+        condition: service_healthy
+    networks:
+      - redis-network
+    restart: always
+
+networks:
+  redis-network:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.20.0.0/16

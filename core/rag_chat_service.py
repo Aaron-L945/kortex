@@ -2,36 +2,40 @@ import asyncio
 import json
 import hashlib
 from loguru import logger
+import yaml
 
 from core.model_pool import router as llm_router
 from langchain_openai import ChatOpenAI
-from langchain.schema import SystemMessage, HumanMessage
+from langchain_core.messages import SystemMessage, HumanMessage
 from core.semantic_cache import SemanticCache
+from core.embedding_manager import EmbeddingCacheManager
 
 class SecureChatService:
     def __init__(self, rag_backend):
         self.rag_backend = rag_backend
+        self.emb_cache_manager = EmbeddingCacheManager(rag_backend)  # 复用 RAG 后端的模型实例    
         # 初始化语义缓存（复用 RAG 后端的 redis 和 embedding 模块）
         self.semantic_cache = SemanticCache(
-            redis_client=rag_backend.emb_cache_manager.redis,
-            embedding_manager=rag_backend.emb_cache_manager
+            redis_client=self.emb_cache_manager.redis,
+            embedding_manager=self.emb_cache_manager
         )
+        self.prompt_template = self._load_prompt_template()
+        logger.info("SecureChatService initialized and prompt_template loaded.")
+
+    def _load_prompt_template(self):
+        with open("/home/aaron/kortex/prompts/rag/answer_with_ref.yaml", 'r', encoding='utf-8') as f:
+            config = yaml.safe_load(f)
+        return config.get("template", "")
 
 
-    async def ask_question_stream(self, query: str, user_context: dict):
-        # --- [1] 生成 Cache Key ---
-        # 建议加上前缀，区分 Embedding 缓存和答案缓存
-        q_hash = hashlib.md5(query.strip().lower().encode()).hexdigest()
-        cache_key = f"full_ans:{q_hash}"
-
-        # --- [2] 尝试从语义缓存直接获取 (精准匹配层) ---
+    async def ask_question_stream(self, query: str, history: list, user_context: dict):
+        # --- [1] 尝试从语义缓存获取 (支持精确+语义双层匹配) ---
         try:
-            cached_res = await self.rag_backend.emb_cache_manager.redis.get(cache_key)
+            cached_res = await self.semantic_cache.get_cache(query)
             if cached_res:
-                logger.info(f"🔥 [ULTRA HIT] 语义缓存完全命中: {query[:20]}...")
-                data = json.loads(cached_res)
+                logger.info(f"🔥 [ULTRA HIT] 语义缓存命中: {query[:20]}...")
                 # 模拟流式：直接 yield 整个答案
-                yield data['answer'], data['sources']
+                yield cached_res['answer'], cached_res.get('sources', [])
                 return 
         except Exception as e:
             logger.warning(f"⚠️ 读取语义缓存失败: {e}")
@@ -42,13 +46,20 @@ class SecureChatService:
 
         context_parts = []
         sources = set()
-        for hits in search_results:
+        
+        # search_results 是 Milvus 返回的批量结果，通常是 [[hit1, hit2, ...], []]
+        # 我们只需要第一个批次的结果
+        if search_results and len(search_results) > 0:
+            hits = search_results[0] if isinstance(search_results[0], list) else search_results
             for hit in hits[:5]:
                 # 兼容实体获取
-                text = hit.entity.get("text") if hasattr(hit, "entity") else hit.get("text")
-                fname = hit.entity.get("file_name") if hasattr(hit, "entity") else hit.get("file_name")
-                context_parts.append(text)
-                sources.add(fname)
+                text = hit.entity.get("text") if hasattr(hit, "entity") else hit.get("text", "")
+                fname = hit.entity.get("file_name") if hasattr(hit, "entity") else hit.get("file_name", "")
+                dept = hit.entity.get("department") if hasattr(hit, "entity") else hit.get("department", "")
+                # 将文本和来源信息组合
+                source_info = f"[文件: {fname}, 部门: {dept}]"
+                context_parts.append(f"{text}\n来源: {source_info}")
+                sources.add(f"{fname} ({dept})")
 
         source_list = list(sources)
         context_text = "\n".join(context_parts)
@@ -71,8 +82,7 @@ class SecureChatService:
             )
 
             messages = [
-                SystemMessage(content=f"请基于资料回答：\n{context_text}"),
-                HumanMessage(content=query),
+                SystemMessage(content=self.prompt_template.format(context=context_text, history=history, query=query)),
             ]
 
             async for chunk in llm.astream(messages):
@@ -82,21 +92,12 @@ class SecureChatService:
                     # 实时推送给前端
                     yield chunk.content, source_list
 
-        # --- [5] 异步存入语义缓存 (关键步骤) ---
+        # --- [5] 异步存入语义缓存 (使用 SemanticCache 存储)
         if full_answer_content:
             try:
                 complete_answer = "".join(full_answer_content)
-                # 存储结构：答案 + 来源文档列表
-                cache_payload = {
-                    "answer": complete_answer,
-                    "sources": source_list
-                }
-                # 设置过期时间为 24 小时 (86400秒)，可根据 1TB 内存剩余空间调整
-                await self.rag_backend.emb_cache_manager.redis.set(
-                    cache_key, 
-                    json.dumps(cache_payload), 
-                    ex=86400 
-                )
-                logger.debug(f"💾 结果已缓存: {cache_key}")
+                # 使用 semantic_cache 存储（自动生成向量并以 JSON 格式存入 Redis）
+                await self.semantic_cache.set_cache(query, complete_answer, source_list)
+                logger.debug(f"💾 结果已存入语义缓存")
             except Exception as e:
                 logger.error(f"❌ 写入语义缓存异常: {e}")

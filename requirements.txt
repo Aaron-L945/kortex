@@ -3,4 +3,13 @@ langchain-community
 langchain-huggingface
 faiss-cpu
 pymupdf
+pypdf
 sentence-transformers
+uvicorn
+PyJWT
+fastapi
+loguru
+passlib
+bcrypt
+redis[hiredis,search]
+pymilvus

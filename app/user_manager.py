@@ -5,6 +5,7 @@ from passlib.context import CryptContext
 from loguru import logger
 import bcrypt
 import os
+import hashlib  # 新增导入
 
 # --- 补丁必须在 passlib 之前 ---
 if not hasattr(bcrypt, "__about__"):
@@ -47,9 +48,14 @@ class UserManager:
             """)
             conn.commit()
 
+
     def register_user(self, username, password, dept, role="internal"):
-        """用户注册：哈希密码并存入 SQLite"""
-        hashed = pwd_context.hash(password)
+        """用户注册：先预哈希再存入 SQLite"""
+        # 将原始密码预哈希，确保交给 bcrypt 的永远是固定长度的字符串
+        # 这样即便用户输入 100 位密码也不会报错
+        prepared_password = hashlib.sha256(password.encode()).hexdigest()
+        hashed = pwd_context.hash(prepared_password)
+        
         try:
             with self._get_conn() as conn:
                 conn.execute(
@@ -57,30 +63,36 @@ class UserManager:
                     (username, hashed, dept, role)
                 )
                 conn.commit()
-            logger.success(f"用户 {username} 注册成功！部门: {dept}")
+            logger.success(f"用户 {username} 注册成功！")
             return True
         except sqlite3.IntegrityError:
-            logger.error(f"注册失败：用户名 {username} 已存在")
             return False
 
     def authenticate_user(self, username, password):
-        """登录校验并签发 JWT"""
+        """登录校验：先预哈希再 verify"""
         with self._get_conn() as conn:
             cursor = conn.execute(
                 "SELECT password_hash, dept, role FROM users WHERE username = ?", (username,)
             )
             user = cursor.fetchone()
 
-        if user and pwd_context.verify(password, user[0]):
-            # 校验通过，准备 Payload
+        if not user:
+            return None
+
+        # 核心修复点：对输入的明文密码进行同样的预哈希
+        prepared_password = hashlib.sha256(password.encode()).hexdigest()
+        
+        # 日志调试（生产环境请删除）
+        logger.debug(f"校验用户: {username}, 预哈希长度: {len(prepared_password)}")
+
+        if pwd_context.verify(prepared_password, user[0]):
             payload = {
                 "user_id": username,
                 "dept": user[1],
                 "role": user[2],
-                "exp": datetime.datetime.utcnow() + datetime.timedelta(hours=8) # 8小时有效期
+                "exp": datetime.datetime.utcnow() + datetime.timedelta(hours=8)
             }
-            token = jwt.encode(payload, SECRET_KEY, algorithm=ALGORITHM)
-            return token
+            return jwt.encode(payload, SECRET_KEY, algorithm=ALGORITHM)
         return None
 
     @staticmethod
