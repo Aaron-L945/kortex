@@ -8,8 +8,11 @@ import os
 import hashlib  # 新增导入
 
 # --- 补丁必须在 passlib 之前 ---
-if not hasattr(bcrypt, "__about__"):
-    bcrypt.__about__ = type('About', (object,), {'__version__': bcrypt.__version__})
+try:
+    if not hasattr(bcrypt, "__about__"):
+        bcrypt.__about__ = type('About', (object,), {'__version__': getattr(bcrypt, 'version', '4.0.0')})
+except Exception:
+    pass
 from passlib.context import CryptContext
 
 
