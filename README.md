@@ -77,6 +77,24 @@ streamlit run client.py --server.port 8501
 2. 上传 PDF 文档
 3. 开始提问
 
+## 🔧 常用命令
+```bash
+# 列出所有用户
+python scripts/init_user.py list
+
+# 添加用户
+python scripts/init_user.py add username password Dept role
+
+# 示例
+python scripts/init_user.py add newuser pass123 Tech admin
+
+# 交互式添加
+python scripts/init_user.py add
+
+# 删除用户
+python scripts/init_user.py delete username
+```
+
 ## 📁 项目结构
 
 ```
