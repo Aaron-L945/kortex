@@ -331,7 +331,7 @@ kortex/
 
 ```bash
 # 1. 克隆项目
-git clone https://gitee.com/aaron_945/kortex.git
+git clone https://github.com/Aaron-L945/kortex.git
 cd kortex
 
 # 2. 创建虚拟环境
