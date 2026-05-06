@@ -28,3 +28,4 @@ user_dict.txt
 *.jsonl
 volumes/
 sql_data/
+*.rdb

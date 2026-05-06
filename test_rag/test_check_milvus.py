@@ -1,6 +1,7 @@
 import os
 import sys
 from pymilvus import connections, Collection
+from config import Config
 
 # 确保能找到 core 模块
 current_dir = os.path.dirname(os.path.abspath(__file__))
@@ -11,7 +12,7 @@ def verify_milvus_data():
     # 1. 配置参数
     COLLECTION_NAME = "enterprise_knowledge_vault"
     DATA_DIR = os.path.join(project_root, "data")
-    MILVUS_HOST = "10.66.196.31"
+    MILVUS_HOST = Config.MILVUS_HOST
     MILVUS_PORT = "19530"
 
     print("--- 开始数据一致性检查 ---")
