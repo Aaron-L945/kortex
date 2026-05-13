@@ -68,32 +68,33 @@ def ingest_single_pdf_to_milvus(
     from langchain_community.document_loaders import PyPDFLoader
     from langchain_text_splitters import RecursiveCharacterTextSplitter
     
-    def debug(msg):
-        """同时输出到 UI 和控制台"""
+    def log_only(msg):
+        """仅输出到控制台日志，不显示在 UI"""
         logger.info(msg)
+    
+    def ui_show(msg):
+        """输出到 UI 进度显示"""
         if progress_callback:
             progress_callback(msg)
     
     try:
-        # ========== DEBUG: 开始入库 ==========
-        debug(f"[DEBUG] 开始处理文件: {file_name}")
-        debug(f"[DEBUG] 文件大小: {len(file_bytes)} bytes")
-        debug(f"[DEBUG] 访问权限: {access_info}")
-        debug(f"[DEBUG] 业务标签: {business_tags}")
+        # ========== 开始入库 ==========
+        log_only(f"[入库] 开始处理文件: {file_name}")
+        log_only(f"[入库] 文件大小: {len(file_bytes)} bytes")
         
         # 保存临时文件
-        debug(f"[DEBUG] 正在保存临时文件...")
+        log_only(f"[入库] 保存临时文件...")
         with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp_file:
             tmp_file.write(file_bytes)
             tmp_path = tmp_file.name
-        debug(f"[DEBUG] 临时文件路径: {tmp_path}")
+        log_only(f"[入库] 临时文件路径: {tmp_path}")
         
         # 连接 Milvus
         milvus_host = os.getenv("MILVUS_HOST", "127.0.0.1")
         milvus_port = os.getenv("MILVUS_PORT", "19530")
-        debug(f"[DEBUG] 连接 Milvus: {milvus_host}:{milvus_port}")
+        log_only(f"[入库] 连接 Milvus: {milvus_host}:{milvus_port}")
         connections.connect("default", host=milvus_host, port=milvus_port, timeout=60)
-        debug(f"[DEBUG] Milvus 连接成功")
+        log_only(f"[入库] Milvus 连接成功")
         
         collection_name = "enterprise_knowledge_vault"
         dim = 1024
@@ -101,14 +102,14 @@ def ingest_single_pdf_to_milvus(
         # 检查或创建 collection
         from pymilvus import utility
         if utility.has_collection(collection_name):
-            debug(f"[DEBUG] 发现已有 Collection: {collection_name}")
+            log_only(f"[入库] 发现已有 Collection: {collection_name}")
             collection = Collection(collection_name)
             # 获取现有 schema 的字段顺序
             fields_info = collection.schema.fields
             field_names = [f.name for f in fields_info]
-            debug(f"[DEBUG] 现有字段顺序: {field_names}")
+            log_only(f"[入库] 现有字段顺序: {field_names}")
         else:
-            debug(f"[DEBUG] 创建新 Collection: {collection_name}")
+            log_only(f"[入库] 创建新 Collection: {collection_name}")
             fields = [
                 FieldSchema(name="pk", dtype=DataType.INT64, is_primary=True, auto_id=True),
                 FieldSchema(name="vector", dtype=DataType.FLOAT_VECTOR, dim=dim),
@@ -126,51 +127,50 @@ def ingest_single_pdf_to_milvus(
             
             index_params = {"metric_type": "COSINE", "index_type": "IVF_FLAT", "params": {"nlist": 1024}}
             collection.create_index("vector", index_params)
-            debug(f"[DEBUG] Collection 创建并建立索引完成")
+            log_only(f"[入库] Collection 创建并建立索引完成")
             fields_info = collection.schema.fields
             field_names = [f.name for f in fields_info]
         
         collection.load()
-        debug(f"[DEBUG] Collection 已加载到内存")
+        log_only(f"[入库] Collection 已加载到内存")
         
         # 加载并切分文档
-        debug(f"[DEBUG] 正在加载 PDF 文档...")
+        log_only(f"[入库] 正在加载 PDF 文档...")
         loader = PyPDFLoader(tmp_path)
         documents = loader.load()
-        debug(f"[DEBUG] PDF 加载完成，页数: {len(documents)}")
+        log_only(f"[入库] PDF 加载完成，页数: {len(documents)}")
         
         if not documents:
-            debug(f"[DEBUG] 文档为空，跳过")
+            log_only(f"[入库] 文档为空，跳过")
             os.unlink(tmp_path)
             return False
         
         splitter = RecursiveCharacterTextSplitter(chunk_size=800, chunk_overlap=80)
         chunks = splitter.split_documents(documents)
-        debug(f"[DEBUG] 文档切分完成，块数: {len(chunks)}")
+        log_only(f"[入库] 文档切分完成，块数: {len(chunks)}")
         
         texts = [c.page_content.replace('\x00', '').strip()[:3900] for c in chunks if c.page_content.strip()]
-        debug(f"[DEBUG] 有效文本块数: {len(texts)}")
+        log_only(f"[入库] 有效文本块数: {len(texts)}")
         
         if not texts:
-            debug(f"[DEBUG] 无有效文本，跳过")
+            log_only(f"[入库] 无有效文本，跳过")
             os.unlink(tmp_path)
             return False
         
         # 生成 embeddings
         total_chunks = len(texts)
-        debug(f"[DEBUG] 开始生成 Embeddings，共 {total_chunks} 块...")
-        debug(f"📄 正在处理 {total_chunks} 个文本块...")
+        log_only(f"[入库] 开始生成 Embeddings，共 {total_chunks} 块...")
         
         all_embeddings = []
         batch_size = 4
         for i in range(0, len(texts), batch_size):
             batch = texts[i:i + batch_size]
-            debug(f"[DEBUG] 正在 embedding 第 {i+1}-{min(i+batch_size, len(texts))} 块")
+            log_only(f"[入库] embedding 批次 {i//batch_size + 1}/{(len(texts)-1)//batch_size + 1}")
             vecs = embedder.embed_documents(batch)
             all_embeddings.extend(vecs)
             time.sleep(0.5)
         
-        debug(f"[DEBUG] Embeddings 生成完成，有效向量数: {len(all_embeddings)}")
+        log_only(f"[入库] Embeddings 生成完成，有效向量数: {len(all_embeddings)}")
         
         # 对齐数据
         valid_texts, valid_vecs = [], []
@@ -180,9 +180,9 @@ def ingest_single_pdf_to_milvus(
                 valid_texts.append(t)
                 valid_vecs.append(vec)
             else:
-                debug(f"[DEBUG] 第 {idx} 块向量为空，跳过")
+                log_only(f"[入库] 第 {idx} 块向量为空，跳过")
         
-        debug(f"[DEBUG] 有效数据: {len(valid_texts)} 条文本, {len(valid_vecs)} 个向量")
+        log_only(f"[入库] 有效数据: {len(valid_texts)} 条文本, {len(valid_vecs)} 个向量")
         
         # 准备元数据
         def _to_list(val, default):
@@ -191,8 +191,8 @@ def ingest_single_pdf_to_milvus(
         
         dept_list = _to_list(access_info.get("department"), "public")
         role_list = _to_list(access_info.get("role_access"), "user")
-        debug(f"[DEBUG] 部门列表: {dept_list}")
-        debug(f"[DEBUG] 角色列表: {role_list}")
+        log_only(f"[入库] 部门列表: {dept_list}")
+        log_only(f"[入库] 角色列表: {role_list}")
         
         # 根据字段名称构建数据字典
         def build_data_for_fields(field_list, current_count):
@@ -224,7 +224,7 @@ def ingest_single_pdf_to_milvus(
                     # auto_id 字段，跳过
                     pass
                 else:
-                    debug(f"[DEBUG] 未知字段 {fname}，跳过")
+                    log_only(f"[入库] 未知字段 {fname}，跳过")
             
             return data
         
@@ -237,34 +237,35 @@ def ingest_single_pdf_to_milvus(
             batch_t = valid_texts[i : i + inner_batch_size]
             current_count = len(batch_v)
             
-            debug(f"[DEBUG] 插入第 {i//inner_batch_size + 1} 批，数量: {current_count}")
+            log_only(f"[入库] 插入批次 {i//inner_batch_size + 1}")
             
             # 动态构建数据
             data = build_data_for_fields(fields_info, current_count)
-            debug(f"[DEBUG] 准备插入数据，字段数: {len(data)}")
+            log_only(f"[入库] 准备插入数据，字段数: {len(data)}")
             
             collection.insert(data)
             total_inserted += current_count
-            debug(f"⏳ 已插入 {total_inserted}/{len(valid_vecs)} 条...")
             time.sleep(1.5)
         
-        debug(f"[DEBUG] 开始 Flush...")
+        log_only(f"[入库] 开始 Flush...")
         collection.flush()
-        debug(f"[DEBUG] Flush 完成")
+        log_only(f"[入库] Flush 完成")
         
         connections.disconnect("default")
-        debug(f"[DEBUG] Milvus 断开连接")
+        log_only(f"[入库] Milvus 断开连接")
         
         os.unlink(tmp_path)
-        debug(f"[DEBUG] 临时文件已删除")
+        log_only(f"[入库] 临时文件已删除")
         
-        debug(f"✅ {file_name} 入库完成！共 {total_inserted} 条记录")
+        # 仅在结束时显示成功信息到 UI
+        ui_show(f"✅ {file_name} 入库完成！共 {total_inserted} 条记录")
         return True
         
     except Exception as e:
         error_detail = traceback.format_exc()
-        debug(f"❌ 入库失败: {str(e)}")
-        debug(f"[DEBUG] 错误详情:\n{error_detail}")
+        log_only(f"[入库] 入库失败: {str(e)}")
+        log_only(f"[入库] 错误详情:\n{error_detail}")
+        ui_show(f"❌ 入库失败: {str(e)}")
         return False
 
 
@@ -327,7 +328,7 @@ def chat_page():
                     def update_progress(msg):
                         progress_area.info(msg)
                     
-                    update_progress("🔄 正在初始化 Embedder...")
+                    update_progress("🔄 正在初始化...")
                     
                     try:
                         from langchain_huggingface import HuggingFaceEmbeddings
@@ -336,7 +337,7 @@ def chat_page():
                         load_dotenv()
                         embedding_model_path = os.getenv("EMBEDDING_MODEL_NAME")
                         
-                        update_progress("📊 正在加载 Embedding 模型...")
+                        update_progress("📊 正在加载模型...")
                         embedder = HuggingFaceEmbeddings(
                             model_name=embedding_model_path,
                             model_kwargs={"device": "cpu"},
@@ -438,7 +439,7 @@ def chat_page():
                                         
                                         # 2. 检查是否有实质性内容输出
                                         if chunk:
-                                            # 如果是第一个有效字符，清空之前的“正在检索...”提示
+                                            # 如果是第一个有效字符，清空之前的"正在检索..."提示
                                             if not first_token_received:
                                                 full_response = "" 
                                                 first_token_received = True
@@ -450,7 +451,7 @@ def chat_page():
                                 except:
                                     continue
             
-            # 运行异步任务（这期间 UI 会一直显示“正在检索...”）
+            # 运行异步任务（这期间 UI 会一直显示"正在检索..."）
             asyncio.run(get_streaming_response())
             
             # 3. 最后收尾

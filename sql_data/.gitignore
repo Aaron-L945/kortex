@@ -1,0 +1,5 @@
+# Ignore all .db files in this directory
+*.db
+
+# But track the directory structure
+!.gitignore
